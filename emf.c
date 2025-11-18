@@ -670,6 +670,8 @@ void emf_update_part_fld( t_emf* const emf ) {
     switch (emf->ext_fld.E_type)
     {
     case EMF_FLD_TYPE_UNIFORM: {
+        // PARALLEL: Uniform E field
+        #pragma omp parallel for schedule(static)
         for (int i=-emf->gc[0]; i<emf->nx+emf->gc[1]; i++) {
             float3 e = emf -> E[i];
             e.x += emf->ext_fld.E_0.x;
@@ -678,7 +680,10 @@ void emf_update_part_fld( t_emf* const emf ) {
             E_part[i] = e;
         }
         break; }
+
     case EMF_FLD_TYPE_CUSTOM: {
+        // PARALLEL: Custom E field (most beneficial!)
+        #pragma omp parallel for schedule(static)
         for (int i=-emf->gc[0]; i<emf->nx+emf->gc[1]; i++) {
             float3 ext_E = (*emf->ext_fld.E_custom)(i,emf->dx,emf->ext_fld.E_custom_data);
 
@@ -689,6 +694,7 @@ void emf_update_part_fld( t_emf* const emf ) {
             E_part[i] = e;
         }
         break; }
+
     case EMF_FLD_TYPE_NONE:
         break;
     }
@@ -699,6 +705,8 @@ void emf_update_part_fld( t_emf* const emf ) {
     switch (emf->ext_fld.B_type)
     {
     case EMF_FLD_TYPE_UNIFORM: {
+        // PARALLEL: Uniform B field
+        #pragma omp parallel for schedule(static)
         for (int i=-emf->gc[0]; i<emf->nx+emf->gc[1]; i++) {
             float3 b = emf -> B[i];
             b.x += emf->ext_fld.B_0.x;
@@ -706,10 +714,11 @@ void emf_update_part_fld( t_emf* const emf ) {
             b.z += emf->ext_fld.B_0.z;
             B_part[i] = b;
         }
+        break; }
 
-    }
-        break;
     case EMF_FLD_TYPE_CUSTOM: {
+        // PARALLEL: Custom B field (most beneficial!)
+        #pragma omp parallel for schedule(static)
         for (int i=-emf->gc[0]; i<emf->nx+emf->gc[1]; i++) {
             float3 ext_B = (*emf->ext_fld.B_custom)(i,emf->dx,emf->ext_fld.B_custom_data);
 
@@ -719,12 +728,11 @@ void emf_update_part_fld( t_emf* const emf ) {
             b.z += ext_B.z;
             B_part[i] = b;
         }
-    }
-        break;
+        break; }
+
     case EMF_FLD_TYPE_NONE:
         break;
     }
-
 }
 
 /**

@@ -969,9 +969,8 @@ int ltrim( float x )
  /*********************************************************************************************
  DONE PARALLEL
  *********************************************************************************************/
-void spec_advance( t_species* spec, t_emf* emf, t_current* current )
+void spec_advance( t_species* restrict spec, t_emf* restrict emf, t_current* restrict current )
 {
-
     uint64_t t0;
     t0 = timer_ticks();
 
@@ -985,8 +984,8 @@ void spec_advance( t_species* spec, t_emf* emf, t_current* current )
 
     double energy = 0;
 
-    // Advance particles
-    #pragma omp parallel for reduction(+:energy)
+    // Advance particles - OPTIMIZED
+    #pragma omp parallel for reduction(+:energy) schedule(static)
     for (int i=0; i<spec->np; i++) {
 
         float3 Ep, Bp;
@@ -995,18 +994,17 @@ void spec_advance( t_species* spec, t_emf* emf, t_current* current )
         float gamma, rg, gtem, otsq;
 
         float x1;
-
         int di;
         float dx;
 
-        // Load particle momenta
-        ux = spec -> part[i].ux;
-        uy = spec -> part[i].uy;
-        uz = spec -> part[i].uz;
+        // Load particle momenta - use local variable for better optimization
+        t_part* restrict part = &spec->part[i];
+        ux = part->ux;
+        uy = part->uy;
+        uz = part->uz;
 
         // interpolate fields
-        interpolate_fld( emf -> E_part, emf -> B_part, &spec -> part[i], &Ep, &Bp );
-        // Ep.x = Ep.y = Ep.z = Bp.x = Bp.y = Bp.z = 0;
+        interpolate_fld( emf -> E_part, emf -> B_part, part, &Ep, &Bp );
 
         // advance u using Boris scheme
         Ep.x *= tem;
@@ -1038,7 +1036,6 @@ void spec_advance( t_species* spec, t_emf* emf, t_current* current )
         uz = utz + utx*Bp.y - uty*Bp.x;
 
         // Perform second half of the rotation
-
         Bp.x *= otsq;
         Bp.y *= otsq;
         Bp.z *= otsq;
@@ -1053,16 +1050,16 @@ void spec_advance( t_species* spec, t_emf* emf, t_current* current )
         uz = utz + Ep.z;
 
         // Store new momenta
-        spec -> part[i].ux = ux;
-        spec -> part[i].uy = uy;
-        spec -> part[i].uz = uz;
+        part->ux = ux;
+        part->uy = uy;
+        part->uz = uz;
 
         // push particle
         rg = 1.0f / sqrtf(1.0f + ux*ux + uy*uy + uz*uz);
 
         dx = dt_dx * rg * ux;
 
-        x1 = spec -> part[i].x + dx;
+        x1 = part->x + dx;
 
         di = ltrim(x1);
 
@@ -1071,21 +1068,12 @@ void spec_advance( t_species* spec, t_emf* emf, t_current* current )
         float qvy = spec->q * uy * rg;
         float qvz = spec->q * uz * rg;
 
-        // deposit current using Eskirepov method
-        // dep_current_esk( spec -> part[i].ix, di,
-        // 				 spec -> part[i].x, x1,
-        // 				 qnx, qvy, qvz,
-        // 				 current );
-
-        dep_current_zamb( spec -> part[i].ix, di,
-                         spec -> part[i].x, dx,
-                         qnx, qvy, qvz,
-                         current );
+        // deposit current using Zamb method
+        dep_current_zamb( part->ix, di, part->x, dx, qnx, qvy, qvz, current );
 
         // Store results
-        spec -> part[i].x = x1;
-        spec -> part[i].ix += di;
-
+        part->x = x1;
+        part->ix += di;
     }
 
     // Store energy
@@ -1112,8 +1100,10 @@ void spec_advance( t_species* spec, t_emf* emf, t_current* current )
 
     } else {
         // Use periodic boundaries in x
+        #pragma omp parallel for schedule(static)
         for (int i=0; i<spec->np; i++) {
-            spec -> part[i].ix += (( spec -> part[i].ix < 0 ) ? nx0 : 0 ) - (( spec -> part[i].ix >= nx0 ) ? nx0 : 0);
+            int ix = spec->part[i].ix;
+            spec->part[i].ix = ix + (( ix < 0 ) ? nx0 : 0 ) - (( ix >= nx0 ) ? nx0 : 0);
         }
     }
 

@@ -1,5 +1,5 @@
 # GCC options
- CC = gcc
+CC = gcc
 CFLAGS = -Ofast -g -std=c99 -pedantic -Wall -fopenmp -fno-omit-frame-pointer \
          -march=native -mtune=native -ffast-math -funroll-loops \
          -ftree-vectorize -fopt-info-vec -flto

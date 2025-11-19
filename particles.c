@@ -73,9 +73,7 @@ double spec_perf( void )
  */
 void spec_set_u( t_species* spec, const int start, const int end )
 {
-    #pragma omp parallel
 #if 0
-   #pragma omp for
     for (int i = start; i <= end; i++) {
         spec->part[i].ux = spec -> ufl[0] + spec -> uth[0] * rand_norm();
         spec->part[i].uy = spec -> ufl[1] + spec -> uth[1] * rand_norm();
@@ -87,7 +85,6 @@ void spec_set_u( t_species* spec, const int start, const int end )
      */
 
     // Initialize thermal component
-    #pragma omp for
     for (int i = start; i <= end; i++) {
         spec->part[i].ux = spec -> uth[0] * rand_norm();
         spec->part[i].uy = spec -> uth[1] * rand_norm();
@@ -103,7 +100,6 @@ void spec_set_u( t_species* spec, const int start, const int end )
     memset(npc, 0, (spec->nx) * sizeof(int) );
 
     // Accumulate momentum in each cell
-     #pragma omp for
     for (int i = start; i <= end; i++) {
         const int idx  = spec -> part[i].ix;
 
@@ -116,7 +112,6 @@ void spec_set_u( t_species* spec, const int start, const int end )
 
     // Normalize to the number of particles in each cell to get the
     // average momentum in each cell
-    #pragma omp for
     for(int i =0; i< spec->nx; i++ ) {
         const float norm = (npc[ i ] > 0) ? 1.0f/npc[i] : 0;
 
@@ -126,7 +121,6 @@ void spec_set_u( t_species* spec, const int start, const int end )
     }
 
     // Subtract average momentum and add fluid component
-     #pragma omp for
     for (int i = start; i <= end; i++) {
         const int idx  = spec -> part[i].ix;
 
@@ -253,9 +247,6 @@ int spec_np_inj( t_species* spec, const int range[] )
  * @param spec      Particle species
  * @param range     Range of cells in which to inject
  */
-   /*********************************************************************************************
-   DONE PARALLEL
-   *********************************************************************************************/
 void spec_set_x( t_species* spec, const int range[] )
 {
 
@@ -280,18 +271,13 @@ void spec_set_x( t_species* spec, const int range[] )
         // Get edge position normalized to cell size;
         start = spec -> density.start / spec -> dx - spec -> n_move;
 
-        // PARALLEL VERSION - same algorithm
-        #pragma omp parallel for private(k) schedule(static)
         for (i = range[0]; i <= range[1]; i++) {
 
             for (k=0; k<npc; k++) {
                 if ( i + poscell[k] > start ) {
-                    #pragma omp critical
-                    {
-                        spec->part[ip].ix = i;
-                        spec->part[ip].x = poscell[k];
-                        ip++;
-                    }
+                    spec->part[ip].ix = i;
+                    spec->part[ip].x = poscell[k];
+                    ip++;
                 }
             }
         }
@@ -305,18 +291,13 @@ void spec_set_x( t_species* spec, const int range[] )
         start = spec -> density.start / spec -> dx - spec -> n_move;
         end   = spec -> density.end / spec -> dx - spec -> n_move;
 
-        // PARALLEL VERSION - same algorithm
-        #pragma omp parallel for private(k) schedule(static)
         for (i = range[0]; i <= range[1]; i++) {
 
             for (k=0; k<npc; k++) {
                 if ( i + poscell[k] > start &&  i + poscell[k] < end ) {
-                    #pragma omp critical
-                    {
-                        spec->part[ip].ix = i;
-                        spec->part[ip].x = poscell[k];
-                        ip++;
-                    }
+                    spec->part[ip].ix = i;
+                    spec->part[ip].x = poscell[k];
+                    ip++;
                 }
             }
         }
@@ -325,7 +306,7 @@ void spec_set_x( t_species* spec, const int range[] )
         break;
 
     case RAMP: // ramp like density profile
-        // KEEP ORIGINAL SERIAL CODE - complex dependencies
+
         {
             // Ramp start/finish in cell units
             double r0 = spec -> density.start / spec -> dx;
@@ -380,11 +361,14 @@ void spec_set_x( t_species* spec, const int range[] )
 
             }
         }
+
+        // printf("Injected %d particles with ramp injection \n", ip - spec -> np );
         break;
 
     case CUSTOM: // custom density profile
-        // KEEP ORIGINAL SERIAL CODE - complex dependencies
+
         {
+
             const double dx = spec -> dx;
 
             // Charge per simulation particle
@@ -436,25 +420,24 @@ void spec_set_x( t_species* spec, const int range[] )
 
             spec -> density.custom_q_inj = d1;
         }
-        break;
 
+        // printf("Injected %d particles with custom injection \n", ip - spec -> np );
+        break;
+    
     case EMPTY: // Empty profile
         break;
 
     default: // Uniform density
-        // PARALLEL VERSION - same algorithm
-        #pragma omp parallel for private(k) schedule(static)
         for (i = range[0]; i <= range[1]; i++) {
 
             for (k=0; k<npc; k++) {
-                #pragma omp critical
-                {
-                    spec->part[ip].ix = i;
-                    spec->part[ip].x = poscell[k];
-                    ip++;
-                }
+                spec->part[ip].ix = i;
+                spec->part[ip].x = poscell[k];
+                ip++;
             }
         }
+        // printf("Injected %d particles with uniform injection \n", ip - spec -> np );
+
     }
 
     // Update total number of injected particles
@@ -464,6 +447,7 @@ void spec_set_x( t_species* spec, const int range[] )
     spec -> np = ip;
 
 }
+
 /**
  * @brief Grows particle buffer to specified size.
  * 
@@ -524,10 +508,6 @@ void spec_inject_particles( t_species* spec, const int range[] )
  * @param dt        Simulation time step, in simulation units
  * @param density   Density profile for particle injection, may be set to NULL
  **/
-
-  /*********************************************************************************************
-  NO PARALLEL , ZERO IMPACT
-  *********************************************************************************************/
 void spec_new( t_species* spec, char name[], const float m_q, const int ppc,
               const float *ufl, const float * uth,
               const int nx, float box, const float dt, t_density* density )
@@ -611,10 +591,6 @@ void spec_new( t_species* spec, char name[], const float m_q, const int ppc,
  * 
  * @param spec      Particle species
  */
-
- /*********************************************************************************************
- DONE PARALLEL
- *********************************************************************************************/
 void spec_move_window( t_species *spec ){
 
     if ((spec->iter * spec->dt ) > (spec->dx * (spec->n_move + 1)))  {
@@ -622,7 +598,6 @@ void spec_move_window( t_species *spec ){
         // shift all particles left
         // particles leaving the box will be removed later
         int i;
-        #pragma omp parallel for schedule(static)
         for( i = 0; i < spec->np; i++ ) {
             spec->part[i].ix--;
         }
@@ -667,11 +642,6 @@ void spec_delete( t_species* spec )
  * @param qvz       Z current ( q * vz )
  * @param current   Electric current density
  */
-
-
- /*********************************************************************************************
- NO PARALLEL, SMALL LOOP
- *********************************************************************************************/
 void dep_current_esk( int ix0, int di,
                         float x0, float x1,
                         float qnx, float qvy, float qvz,
@@ -734,11 +704,6 @@ void dep_current_esk( int ix0, int di,
  * @param qvz       Z current ( q * vz )
  * @param current   Electric current density
  */
-
-
- /*********************************************************************************************
- NO PARALLEL
- *********************************************************************************************/
 void dep_current_zamb( int ix0, int di,
                         float x0, float dx,
                         float qnx, float qvy, float qvz,
@@ -828,12 +793,9 @@ void dep_current_zamb( int ix0, int di,
  * 
  * @param spec      Particle species
  */
-
- /*********************************************************************************************
- NO PARALLEL
- *********************************************************************************************/
 void spec_sort( t_species* spec )
 {
+
     const int ncell = spec->nx;
 
     // Allocate index memory
@@ -843,11 +805,9 @@ void spec_sort( t_species* spec )
     int * restrict npic = (int *) malloc( ncell * sizeof(int));
     memset( npic, 0, ncell * sizeof(int));
 
-    // Generate sorted index - PARALLEL
-    #pragma omp parallel for schedule(static)
+    // Generate sorted index
     for (int i=0; i<spec->np; i++) {
         idx[i] = spec->part[i].ix;
-        #pragma omp atomic
         npic[idx[i]]++;
     }
 
@@ -858,20 +818,15 @@ void spec_sort( t_species* spec )
         isum += j;
     }
 
-    // Generate final indices - PARALLEL (FIXED)
-    #pragma omp parallel for schedule(static)
-    for (int i=0; i < spec->np; i++) {
+    for (int i=0; i< spec->np; i++) {
         int j = idx[i];
-        int pos;
-        #pragma omp atomic capture
-        { pos = npic[j]; npic[j]++; }
-        idx[i] = pos;
+        idx[i] = npic[j]++;
     }
 
     // free temp. array
     free(npic);
 
-    // low mem - KEEP SERIAL
+    // low mem
     for (int i=0; i < spec->np; i++) {
         int k = idx[i];
         while ( k > i ) {
@@ -906,10 +861,6 @@ void spec_sort( t_species* spec )
  * @param Ep    E-field interpolated at particle position
  * @param Bp    B-field interpolated at particle position
  */
-
- /*********************************************************************************************
- NO PARALLEL
- *********************************************************************************************/
 void interpolate_fld( const float3* restrict const E, const float3* restrict const B,
               const t_part* restrict const part, float3* restrict const Ep, float3* restrict const Bp )
 {
@@ -965,12 +916,9 @@ int ltrim( float x )
  * @param emf       EM fields
  * @param current   Current density
  */
-
- /*********************************************************************************************
- DONE PARALLEL
- *********************************************************************************************/
-void spec_advance( t_species* restrict spec, t_emf* restrict emf, t_current* restrict current )
+void spec_advance( t_species* spec, t_emf* emf, t_current* current )
 {
+
     uint64_t t0;
     t0 = timer_ticks();
 
@@ -984,8 +932,8 @@ void spec_advance( t_species* restrict spec, t_emf* restrict emf, t_current* res
 
     double energy = 0;
 
-    // Advance particles - OPTIMIZED
-    #pragma omp parallel for reduction(+:energy) schedule(static)
+    // Advance particles
+   #pragma omp parallel for reduction(+:energy) schedule(dynamic, 1024)
     for (int i=0; i<spec->np; i++) {
 
         float3 Ep, Bp;
@@ -994,17 +942,18 @@ void spec_advance( t_species* restrict spec, t_emf* restrict emf, t_current* res
         float gamma, rg, gtem, otsq;
 
         float x1;
+
         int di;
         float dx;
 
-        // Load particle momenta - use local variable for better optimization
-        t_part* restrict part = &spec->part[i];
-        ux = part->ux;
-        uy = part->uy;
-        uz = part->uz;
+        // Load particle momenta
+        ux = spec -> part[i].ux;
+        uy = spec -> part[i].uy;
+        uz = spec -> part[i].uz;
 
         // interpolate fields
-        interpolate_fld( emf -> E_part, emf -> B_part, part, &Ep, &Bp );
+        interpolate_fld( emf -> E_part, emf -> B_part, &spec -> part[i], &Ep, &Bp );
+        // Ep.x = Ep.y = Ep.z = Bp.x = Bp.y = Bp.z = 0;
 
         // advance u using Boris scheme
         Ep.x *= tem;
@@ -1036,6 +985,7 @@ void spec_advance( t_species* restrict spec, t_emf* restrict emf, t_current* res
         uz = utz + utx*Bp.y - uty*Bp.x;
 
         // Perform second half of the rotation
+
         Bp.x *= otsq;
         Bp.y *= otsq;
         Bp.z *= otsq;
@@ -1050,16 +1000,16 @@ void spec_advance( t_species* restrict spec, t_emf* restrict emf, t_current* res
         uz = utz + Ep.z;
 
         // Store new momenta
-        part->ux = ux;
-        part->uy = uy;
-        part->uz = uz;
+        spec -> part[i].ux = ux;
+        spec -> part[i].uy = uy;
+        spec -> part[i].uz = uz;
 
         // push particle
         rg = 1.0f / sqrtf(1.0f + ux*ux + uy*uy + uz*uz);
 
         dx = dt_dx * rg * ux;
 
-        x1 = part->x + dx;
+        x1 = spec -> part[i].x + dx;
 
         di = ltrim(x1);
 
@@ -1068,12 +1018,22 @@ void spec_advance( t_species* restrict spec, t_emf* restrict emf, t_current* res
         float qvy = spec->q * uy * rg;
         float qvz = spec->q * uz * rg;
 
-        // deposit current using Zamb method
-        dep_current_zamb( part->ix, di, part->x, dx, qnx, qvy, qvz, current );
+        // deposit current using Eskirepov method
+        // dep_current_esk( spec -> part[i].ix, di,
+        // 				 spec -> part[i].x, x1,
+        // 				 qnx, qvy, qvz,
+        // 				 current );
+
+
+        dep_current_zamb( spec -> part[i].ix, di,
+                         spec -> part[i].x, dx,
+                         qnx, qvy, qvz,
+                         current );
 
         // Store results
-        part->x = x1;
-        part->ix += di;
+        spec -> part[i].x = x1;
+        spec -> part[i].ix += di;
+
     }
 
     // Store energy
@@ -1100,10 +1060,8 @@ void spec_advance( t_species* restrict spec, t_emf* restrict emf, t_current* res
 
     } else {
         // Use periodic boundaries in x
-        #pragma omp parallel for schedule(static)
         for (int i=0; i<spec->np; i++) {
-            int ix = spec->part[i].ix;
-            spec->part[i].ix = ix + (( ix < 0 ) ? nx0 : 0 ) - (( ix >= nx0 ) ? nx0 : 0);
+            spec -> part[i].ix += (( spec -> part[i].ix < 0 ) ? nx0 : 0 ) - (( spec -> part[i].ix >= nx0 ) ? nx0 : 0);
         }
     }
 
@@ -1134,32 +1092,24 @@ void spec_advance( t_species* restrict spec, t_emf* restrict emf, t_current* res
  * @param spec      Particle species
  * @param charge    Electric charge density
  */
-
-/*********************************************************************************************
-DONE PARALLEL
-*********************************************************************************************/
-
 void spec_deposit_charge( const t_species* spec, float* charge )
 {
     const float q = spec -> q;
-    const int nx = spec -> nx;
 
-    // PARALLEL: Charge deposition with reduction
-    #pragma omp parallel for
+    // Charge array is expected to have 1 guard cell at the upper boundary
     for (int i=0; i<spec->np; i++) {
         int idx = spec->part[i].ix;
         float w1 = spec->part[i].x;
 
-        // Use atomic operations for thread-safe deposition
-        #pragma omp atomic
-        charge[ idx ]     += ( 1.0f - w1 ) * q;
-        #pragma omp atomic
-        charge[ idx + 1 ] += (        w1 ) * q;
+        charge[ idx            ] += ( 1.0f - w1 ) * q;
+        charge[ idx + 1        ] += (        w1 ) * q;
     }
 
-    // SERIAL: Boundary correction (small, keep serial)
+    // Correct boundary values
+
+    // x
     if ( ! spec -> moving_window ){
-        charge[ 0 ] += charge[ nx ];
+        charge[ 0 ] += charge[ spec -> nx ];
     }
 }
 
@@ -1178,10 +1128,6 @@ void spec_deposit_charge( const t_species* spec, float* charge )
  *
  * @param spec 		Particle species
  */
-
-/*********************************************************************************************
-NO PARALLEL
-*********************************************************************************************/
 void spec_rep_particles( const t_species *spec )
 {
 
@@ -1325,31 +1271,23 @@ void spec_rep_charge( const t_species *spec )
  * @param quant     Quantity for axis {X1, U1, U2, U3}
  * @param axis      Axis data
  */
-
- /*********************************************************************************************
- DONE PARALLEL
- *********************************************************************************************/
 void spec_pha_axis( const t_species *spec, int i0, int np, int quant,
     float * restrict axis )
 {
     switch (quant) {
         case X1:
-            #pragma omp parallel for schedule(static)
             for (int i = 0; i < np; i++)
                 axis[i] = ( spec -> part[i0+i].x + spec -> part[i0+i].ix ) * spec -> dx;
             break;
         case U1:
-            #pragma omp parallel for schedule(static)
             for (int i = 0; i < np; i++)
                 axis[i] = spec -> part[i0+i].ux;
             break;
         case U2:
-            #pragma omp parallel for schedule(static)
             for (int i = 0; i < np; i++)
                 axis[i] = spec -> part[i0+i].uy;
             break;
         case U3:
-            #pragma omp parallel for schedule(static)
             for (int i = 0; i < np; i++)
                 axis[i] = spec -> part[i0+i].uz;
             break;
@@ -1384,10 +1322,6 @@ const char * spec_pha_axis_units( int quant ) {
  * @param pha_range Physical range of each of the phasespace axis
  * @param buf       Phasespace density grid
  */
-
- /*********************************************************************************************
- NO PARALLEL
- *********************************************************************************************/
 void spec_deposit_pha( const t_species *spec, const int rep_type,
               const int pha_nx[], const float pha_range[][2], float* restrict buf )
 {
@@ -1461,10 +1395,6 @@ void spec_deposit_pha( const t_species *spec, const int rep_type,
  * @param pha_nx    Number of grid points in the phasespace density grid
  * @param pha_range Physical range of each of the phasespace axis
  */
-
- /*********************************************************************************************
- NO PARALLEL
- *********************************************************************************************/
 void spec_rep_pha( const t_species *spec, const int rep_type,
               const int pha_nx[], const float pha_range[][2] )
 {
@@ -1546,10 +1476,6 @@ void spec_rep_pha( const t_species *spec, const int rep_type,
  * @param pha_range Physical range of each of the phasespace axis, set to NULL for
  *                  diagnostics other then phasespace density
  */
-
- /*********************************************************************************************
- NO PARALLEL
- *********************************************************************************************/
 void spec_report( const t_species *spec, const int rep_type,
                   const int pha_nx[], const float pha_range[][2] )
 {

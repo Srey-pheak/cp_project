@@ -22,8 +22,6 @@
  * @param ndump 	Diagnostic frequency (number of iterations between diagnostic dumps)
  * @return 			1 if it is time to write a report, 0 otherwise
  */
-
- // no paralle
 int report( int n, int ndump )
 {
 	if (ndump > 0) {
@@ -44,9 +42,6 @@ int report( int n, int ndump )
  * 
  * @param sim 	EM1D Simulation
  */
-
-//no parallel
-
 void sim_iter( t_simulation* sim ) {
 	// Advance particles and deposit current
 	current_zero( &sim -> current );
@@ -68,8 +63,6 @@ void sim_iter( t_simulation* sim ) {
  * @param t0 	Simulation start time (ticks)
  * @param t1 	Simulation end time (ticks)
  */
-
- //NO parallel
 void sim_timings( t_simulation* sim, uint64_t t0, uint64_t t1 ){
 
 	fprintf(stderr, "Time for spec. advance = %f s\n", spec_time());
@@ -97,9 +90,6 @@ void sim_timings( t_simulation* sim, uint64_t t0, uint64_t t1 ){
  * @param species 		Array of particle species, may be NULL (no particles)
  * @param n_species 	Number of particle specis
  */
-
-
-//NO parallel
 void sim_new( t_simulation* sim, int nx, float box, float dt, float tmax, int ndump, t_species* species, int n_species ){
 
 	sim -> dt = dt;
@@ -153,8 +143,6 @@ void sim_set_ext_fld( t_simulation* sim, t_emf_ext_fld* ext_fld ){
  * @param sim 		EM1D Simulation
  * @param smooth 	Digital filtering parameters
  */
-
-//NO parallel
 void sim_set_smooth( t_simulation* sim,  t_smooth* smooth ){
 
     if ( (smooth -> xtype != NONE) && (smooth -> xlevel <= 0) ) {
@@ -169,7 +157,6 @@ void sim_set_smooth( t_simulation* sim,  t_smooth* smooth ){
  * 
  * @param sim 
  */
- //NO PARALLEL
 void sim_set_moving_window( t_simulation* sim ){
 
 	// Set moving window flag and disable boundary conditions
@@ -181,8 +168,6 @@ void sim_set_moving_window( t_simulation* sim ){
 	sim -> current.bc_type = CURRENT_BC_NONE;
 
 	// Set moving window flag for all species
-
-
 	for(int i=0; i<sim -> n_species; i++)
 		sim -> species[i].moving_window = 1;
 }
@@ -192,9 +177,6 @@ void sim_set_moving_window( t_simulation* sim ){
  * 
  * @param sim 	EM1D Simulation
  */
-
- //NO PARALLEL
-
 void sim_report_energy( t_simulation* sim )
 {
 	int i;
@@ -224,8 +206,6 @@ void sim_report_energy( t_simulation* sim )
  * 
  * @param sim 	EM1D Simulation
  */
-
- // NO PARALELL
 void sim_report_energy_ret( t_simulation* sim, double* energy )
 {
 	int i;

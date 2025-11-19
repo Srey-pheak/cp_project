@@ -190,39 +190,75 @@ float lon_env( const t_emf_laser* const laser, const float z )
  */
 void emf_add_laser( t_emf* const emf, t_emf_laser* laser )
 {
-    // ... validation code (keep serial) ...
+	// Validate laser parameters
+	if ( laser -> fwhm != 0 ) {
+		if ( laser -> fwhm <= 0 ) {
+			fprintf(stderr, "Invalid laser FWHM, must be > 0, aborting.\n" );
+			exit(-1);
+		}
 
-    // Launch laser - PARALLEL
-    float dx = emf -> dx;
-    float amp = laser -> omega0 * laser -> a0;
-    float cos_pol = cos( laser -> polarization );
-    float sin_pol = sin( laser -> polarization );
-    float k = laser -> omega0;
+		// The fwhm parameter overrides the rise/flat/fall parameters
+		laser -> rise = laser -> fwhm;
+		laser -> fall = laser -> fwhm;
+		laser -> flat = 0.;
+	}
 
-    float3* restrict E = emf -> E;
-    float3* restrict B = emf -> B;
+	if ( laser -> rise <= 0 ) {
+		fprintf(stderr, "Invalid laser RISE, must be > 0, aborting.\n" );
+		exit(-1);
+	}
 
-    // PARALLEL: Main laser field calculation
+	if ( laser -> flat < 0 ) {
+		fprintf(stderr, "Invalid laser FLAT, must be >= 0, aborting.\n" );
+		exit(-1);
+	}
+
+	if ( laser -> fall <= 0 ) {
+		fprintf(stderr, "Invalid laser FALL, must be > 0, aborting.\n" );
+		exit(-1);
+	}
+
+	// Launch laser
+
+	float z, z_2;
+	float amp, lenv, lenv_2, k;
+	float dx;
+	float cos_pol, sin_pol;
+
+	float3* restrict E = emf -> E;
+	float3* restrict B = emf -> B;
+
+	dx = emf -> dx;
+
+	amp = laser -> omega0 * laser -> a0;
+
+	cos_pol = cos( laser -> polarization );
+	sin_pol = sin( laser -> polarization );
+
+	k = laser -> omega0;
     #pragma omp parallel for schedule(static)
-    for (int i = 0; i < emf->nx; i++) {
-        float z = i * dx;
-        float z_2 = z + dx/2;
+	for (int i = 0; i < emf->nx; i++) {
+		z = i * dx;
+		z_2 = z + dx/2;
 
-        float lenv   = amp * lon_env( laser, z );
-        float lenv_2 = amp * lon_env( laser, z_2 );
+		lenv   = amp * lon_env( laser, z );
+		lenv_2 = amp * lon_env( laser, z_2 );
 
-        // E[i + j*nrow].x += 0.0
-        E[i].y += +lenv * cos( k * z ) * cos_pol;
-        E[i].z += +lenv * cos( k * z ) * sin_pol;
+		// E[i + j*nrow].x += 0.0
+		E[i].y += +lenv * cos( k * z ) * cos_pol;
+		E[i].z += +lenv * cos( k * z ) * sin_pol;
 
-        // E[i + j*nrow].x += 0.0
-        B[i].y += -lenv_2 * cos( k * z_2 ) * sin_pol;
-        B[i].z += +lenv_2 * cos( k * z_2 ) * cos_pol;
-    }
+		// E[i + j*nrow].x += 0.0
+		B[i].y += -lenv_2 * cos( k * z_2 ) * sin_pol;
+		B[i].z += +lenv_2 * cos( k * z_2 ) * cos_pol;
 
-    // Set guard cell values for periodic boundaries
-    if ( emf -> bc_type == EMF_BC_PERIODIC ) emf_update_gc( emf );
+	}
+
+	// Set guard cell values for periodic boundaries
+	if ( emf -> bc_type == EMF_BC_PERIODIC ) emf_update_gc( emf );
+
 }
+
 /*********************************************************************************************
 
  Diagnostics
@@ -388,15 +424,15 @@ void yee_b( t_emf *emf, const float dt )
     float3* const restrict B = emf -> B;
     const float3* const restrict E = emf -> E;
 
-    float dt_dx = dt / emf->dx;
+	float dt_dx = dt / emf->dx;
 
-    // PARALLEL: Magnetic field update
-    #pragma omp parallel for schedule(static)
-    for (int i=-1; i<=emf->nx; i++) {
-        // B[ i ].x += 0;  // Bx does not evolve in 1D
-        B[ i ].y += (   dt_dx * ( E[i+1].z - E[ i ].z) );
-        B[ i ].z += ( - dt_dx * ( E[i+1].y - E[ i ].y) );
-    }
+	// Canonical implementation
+	 #pragma omp parallel for schedule(static)
+	for (int i=-1; i<=emf->nx; i++) {
+		// B[ i ].x += 0;  // Bx does not evolve in 1D
+		B[ i ].y += (   dt_dx * ( E[i+1].z - E[ i ].z) );
+		B[ i ].z += ( - dt_dx * ( E[i+1].y - E[ i ].y) );
+	}
 }
 
 /**
@@ -406,25 +442,23 @@ void yee_b( t_emf *emf, const float dt )
  * @param current 	Electric current density
  * @param dt 		Time step
  */
-
- // DONE PARALLEl
-
 void yee_e( t_emf *emf, const t_current *current, const float dt )
 {
-    float dt_dx = dt / emf->dx;
+	float dt_dx = dt / emf->dx;
 
     float3* const restrict E = emf -> E;
     const float3* const restrict B = emf -> B;
     const float3* const restrict J = current -> J;
     const int nx = emf->nx;
 
-    // PARALLEL: Electric field update
-    #pragma omp parallel for schedule(static)
-    for (int i = 0; i <= nx+1; i++) {
-        E[i].x += (                                - dt * J[i].x );
-        E[i].y += ( - dt_dx * ( B[i].z - B[i-1].z) - dt * J[i].y );
-        E[i].z += ( + dt_dx * ( B[i].y - B[i-1].y) - dt * J[i].z );
-    }
+	// Canonical implementation
+	#pragma omp parallel for schedule(static)
+	for (int i = 0; i <= nx+1; i++) {
+		E[i].x += (                                - dt * J[i].x );
+		E[i].y += ( - dt_dx * ( B[i].z - B[i-1].z) - dt * J[i].y );
+		E[i].z += ( + dt_dx * ( B[i].y - B[i-1].y) - dt * J[i].z );
+	}
+
 }
 
 /**
@@ -435,8 +469,6 @@ void yee_e( t_emf *emf, const t_current *current, const float dt )
  * 
  * @param emf 	EM fields
  */
-
- // done paralle , but didnt make better very small loop  , took out
 void emf_update_gc( t_emf *emf )
 {
     float3* const restrict E = emf -> E;
@@ -660,8 +692,6 @@ void emf_set_ext_fld( t_emf* const emf, t_emf_ext_fld* ext_fld ) {
  * 
  * @param emf 	EM fields
  */
-
- // i did paralle but didnt make any better
 void emf_update_part_fld( t_emf* const emf ) {
 
     // Restrict pointers to E_part
@@ -670,8 +700,6 @@ void emf_update_part_fld( t_emf* const emf ) {
     switch (emf->ext_fld.E_type)
     {
     case EMF_FLD_TYPE_UNIFORM: {
-        // PARALLEL: Uniform E field
-        #pragma omp parallel for schedule(static)
         for (int i=-emf->gc[0]; i<emf->nx+emf->gc[1]; i++) {
             float3 e = emf -> E[i];
             e.x += emf->ext_fld.E_0.x;
@@ -680,10 +708,7 @@ void emf_update_part_fld( t_emf* const emf ) {
             E_part[i] = e;
         }
         break; }
-
     case EMF_FLD_TYPE_CUSTOM: {
-        // PARALLEL: Custom E field (most beneficial!)
-        #pragma omp parallel for schedule(static)
         for (int i=-emf->gc[0]; i<emf->nx+emf->gc[1]; i++) {
             float3 ext_E = (*emf->ext_fld.E_custom)(i,emf->dx,emf->ext_fld.E_custom_data);
 
@@ -694,7 +719,6 @@ void emf_update_part_fld( t_emf* const emf ) {
             E_part[i] = e;
         }
         break; }
-
     case EMF_FLD_TYPE_NONE:
         break;
     }
@@ -705,8 +729,6 @@ void emf_update_part_fld( t_emf* const emf ) {
     switch (emf->ext_fld.B_type)
     {
     case EMF_FLD_TYPE_UNIFORM: {
-        // PARALLEL: Uniform B field
-        #pragma omp parallel for schedule(static)
         for (int i=-emf->gc[0]; i<emf->nx+emf->gc[1]; i++) {
             float3 b = emf -> B[i];
             b.x += emf->ext_fld.B_0.x;
@@ -714,11 +736,10 @@ void emf_update_part_fld( t_emf* const emf ) {
             b.z += emf->ext_fld.B_0.z;
             B_part[i] = b;
         }
-        break; }
 
+    }
+        break; 
     case EMF_FLD_TYPE_CUSTOM: {
-        // PARALLEL: Custom B field (most beneficial!)
-        #pragma omp parallel for schedule(static)
         for (int i=-emf->gc[0]; i<emf->nx+emf->gc[1]; i++) {
             float3 ext_B = (*emf->ext_fld.B_custom)(i,emf->dx,emf->ext_fld.B_custom_data);
 
@@ -728,11 +749,12 @@ void emf_update_part_fld( t_emf* const emf ) {
             b.z += ext_B.z;
             B_part[i] = b;
         }
-        break; }
-
+    }
+        break; 
     case EMF_FLD_TYPE_NONE:
         break;
     }
+
 }
 
 /**

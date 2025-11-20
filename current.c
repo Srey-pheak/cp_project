@@ -109,32 +109,48 @@ void current_zero( t_current *current )
  * 
  * @param current Electric current density
  */
-
- // DONE PARALALLE
 void current_update_gc( t_current *current )
 {
     if ( current -> bc_type == CURRENT_BC_PERIODIC ) {
         float3* restrict const J = current -> J;
         const int nx = current -> nx;
+        const int gc_lo = current->gc[0];
+        const int gc_hi = current->gc[1];
 
-        // lower - add the values from upper boundary ( both gc and inside box )
-        #pragma omp parallel for schedule(static)
-        for (int i=-current->gc[0]; i<current->gc[1]; i++) {
-            J[ i ].x += J[ nx + i ].x;
-            J[ i ].y += J[ nx + i ].y;
-            J[ i ].z += J[ nx + i ].z;
+        /* lower - add the values from upper boundary ( both gc and inside box ) */
+        if (gc_lo + gc_hi > 8) {
+            #pragma omp parallel for schedule(static)
+            for (int ii = -gc_lo; ii < gc_hi; ++ii) {
+                J[ ii ].x += J[ nx + ii ].x;
+                J[ ii ].y += J[ nx + ii ].y;
+                J[ ii ].z += J[ nx + ii ].z;
+            }
+        } else {
+            for (int ii = -gc_lo; ii < gc_hi; ++ii) {
+                J[ ii ].x += J[ nx + ii ].x;
+                J[ ii ].y += J[ nx + ii ].y;
+                J[ ii ].z += J[ nx + ii ].z;
+            }
         }
-        
-        // upper - just copy the values from the lower boundary
 
-        #pragma omp parallel for schedule(static)
-        for (int i=-current->gc[0]; i<current->gc[1]; i++) {
-            J[ nx + i ].x = J[ i ].x;
-            J[ nx + i ].y = J[ i ].y;
-            J[ nx + i ].z = J[ i ].z;
+        /* upper - copy values from lower boundary */
+        if (gc_lo + gc_hi > 8) {
+            #pragma omp parallel for schedule(static)
+            for (int ii = -gc_lo; ii < gc_hi; ++ii) {
+                J[ nx + ii ].x = J[ ii ].x;
+                J[ nx + ii ].y = J[ ii ].y;
+                J[ nx + ii ].z = J[ ii ].z;
+            }
+        } else {
+            for (int ii = -gc_lo; ii < gc_hi; ++ii) {
+                J[ nx + ii ].x = J[ ii ].x;
+                J[ nx + ii ].y = J[ ii ].y;
+                J[ nx + ii ].z = J[ ii ].z;
+            }
         }
     }
 }
+
 
 /**
  * @brief Advances electric current density 1 time step
@@ -169,8 +185,6 @@ void current_update( t_current *current )
  * @param current Electric current object
  * @param jc Current component to save, must be one of {0,1,2}
  */
-
- // DONE PARALLEL
 void current_report( const t_current *current, const int jc )
 {
 	if ( jc < 0 || jc > 2 ) {
@@ -182,27 +196,23 @@ void current_report( const t_current *current, const int jc )
     float buf[current->nx];
     float3 *f = current->J;
 
-  switch (jc) {
-      case 0:
-          #pragma omp parallel for
-          for ( int i = 0; i < current->nx; i++ ) {
-              buf[i] = f[i].x;
-          }
-          break;
-      case 1:
-          #pragma omp parallel for
-          for ( int i = 0; i < current->nx; i++ ) {
-              buf[i] = f[i].y;
-          }
-          break;
-      case 2:
-          #pragma omp parallel for
-          for ( int i = 0; i < current->nx; i++ ) {
-              buf[i] = f[i].z;
-          }
-          break;
-  }
-
+    switch (jc) {
+        case 0:
+            for ( int i = 0; i < current->nx; i++ ) {
+                buf[i] = f[i].x;
+            }
+            break;
+        case 1:
+            for ( int i = 0; i < current->nx; i++ ) {
+                buf[i] = f[i].y;
+            }
+            break;
+        case 2:
+            for ( int i = 0; i < current->nx; i++ ) {
+                buf[i] = f[i].z;
+            }
+            break;
+    }
 
 	char vfname[16];	// Dataset name
 	char vflabel[16];	// Dataset label (for plots)
@@ -273,42 +283,64 @@ void get_smooth_comp( int n, float* sa, float* sb) {
  * @param sa kernel a value
  * @param sb kernel b value
  */
-
- // NO PARALLEL
-void kernel_x( t_current* const current, const float sa, const float sb ){
-
+void kernel_x( t_current* const current, const float sa, const float sb )
+{
     float3* restrict const J = current -> J;
+    const int nx = current->nx;
 
-    float3 fl = J[-1];
-    float3 f0 = J[ 0];
+    /* allocate temporary output array for internal cells */
+    float3 * tmp = (float3*) malloc( (size_t) nx * sizeof(float3) );
+    if (!tmp) {
+        /* fallback to original in-place if allocation fails */
+        float3 fl = J[-1];
+        float3 f0 = J[0];
+        for (int i = 0; i < nx; ++i) {
+            float3 fu = J[i + 1];
+            float3 fs;
+            fs.x = sa * fl.x + sb * f0.x + sa * fu.x;
+            fs.y = sa * fl.y + sb * f0.y + sa * fu.y;
+            fs.z = sa * fl.z + sb * f0.z + sa * fu.z;
+            J[i] = fs;
+            fl = f0;
+            f0 = fu;
+        }
+        if ( current -> bc_type == CURRENT_BC_PERIODIC ) {
+            for(int i = -current->gc[0]; i<0; i++)
+                J[ i ] = J[ current->nx + i ];
+            for (int i=0; i<current->gc[1]; i++)
+                J[ current->nx + i ] = J[ i ];
+        }
+        return;
+    }
 
-    for( int i = 0; i < current -> nx; i++) {
-
+    /* compute filter into tmp (each index independent) */
+    #pragma omp parallel for schedule(static)
+    for (int i = 0; i < nx; ++i) {
+        float3 fl = J[i - 1];
+        float3 f0 = J[i];
         float3 fu = J[i + 1];
-
         float3 fs;
-
         fs.x = sa * fl.x + sb * f0.x + sa * fu.x;
         fs.y = sa * fl.y + sb * f0.y + sa * fu.y;
         fs.z = sa * fl.z + sb * f0.z + sa * fu.z;
-
-        J[i] = fs;
-
-        fl = f0;
-        f0 = fu;
-
+        tmp[i] = fs;
     }
 
-    // Update x boundaries for periodic boundaries
+    /* copy back */
+    #pragma omp parallel for schedule(static)
+    for (int i = 0; i < nx; ++i) {
+        J[i] = tmp[i];
+    }
+
+    free(tmp);
+
+    /* Update periodic boundaries */
     if ( current -> bc_type == CURRENT_BC_PERIODIC ) {
         for(int i = -current->gc[0]; i<0; i++)
             J[ i ] = J[ current->nx + i ];
-
         for (int i=0; i<current->gc[1]; i++)
             J[ current->nx + i ] = J[ i ];
     }
-
-
 }
 
 /**
@@ -322,8 +354,6 @@ void kernel_x( t_current* const current, const float sa, const float sb ){
  * 
  * @param current Electric current density
  */
-
- // NO PARALLE , SMALL LOOP
 void current_smooth( t_current* const current ) {
 
     // filter kernel [sa, sb, sa]

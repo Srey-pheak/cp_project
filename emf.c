@@ -236,7 +236,7 @@ void emf_add_laser( t_emf* const emf, t_emf_laser* laser )
 	sin_pol = sin( laser -> polarization );
 
 	k = laser -> omega0;
-    #pragma omp parallel for schedule(static)
+
 	for (int i = 0; i < emf->nx; i++) {
 		z = i * dx;
 		z_2 = z + dx/2;
@@ -421,19 +421,22 @@ void mur_abc( t_emf *emf ) {
  */
 void yee_b( t_emf *emf, const float dt )
 {
-    float3* const restrict B = emf -> B;
-    const float3* const restrict E = emf -> E;
+    float3* const restrict B = emf->B;
+    const float3* const restrict E = emf->E;
 
-	float dt_dx = dt / emf->dx;
+    const float dt_dx = dt / emf->dx;
+    const int i0 = -1;
+    const int i1 = emf->nx;
 
-	// Canonical implementation
-	 #pragma omp parallel for schedule(static)
-	for (int i=-1; i<=emf->nx; i++) {
-		// B[ i ].x += 0;  // Bx does not evolve in 1D
-		B[ i ].y += (   dt_dx * ( E[i+1].z - E[ i ].z) );
-		B[ i ].z += ( - dt_dx * ( E[i+1].y - E[ i ].y) );
-	}
+    /* Parallelize the loop: each i writes distinct B[i] => safe */
+    #pragma omp parallel for schedule(static)
+    for (int i = i0; i <= i1; ++i) {
+        /* Bx doesn't change in 1D */
+        B[i].y += (dt_dx * ( E[i+1].z - E[i].z ));
+        B[i].z += (-dt_dx * ( E[i+1].y - E[i].y ));
+    }
 }
+
 
 /**
  * @brief Advance Electric field using Yee scheme
@@ -444,21 +447,26 @@ void yee_b( t_emf *emf, const float dt )
  */
 void yee_e( t_emf *emf, const t_current *current, const float dt )
 {
-	float dt_dx = dt / emf->dx;
+    const float dt_dx = dt / emf->dx;
 
-    float3* const restrict E = emf -> E;
-    const float3* const restrict B = emf -> B;
-    const float3* const restrict J = current -> J;
+    float3* const restrict E = emf->E;
+    const float3* const restrict B = emf->B;
+    const float3* const restrict J = current->J;
     const int nx = emf->nx;
 
-	// Canonical implementation
-	#pragma omp parallel for schedule(static)
-	for (int i = 0; i <= nx+1; i++) {
-		E[i].x += (                                - dt * J[i].x );
-		E[i].y += ( - dt_dx * ( B[i].z - B[i-1].z) - dt * J[i].y );
-		E[i].z += ( + dt_dx * ( B[i].y - B[i-1].y) - dt * J[i].z );
-	}
+    /* Parallelize independent updates of E[i] */
+    #pragma omp parallel for schedule(static)
+    for (int i = 0; i <= nx + 1; ++i) {
+        /* compute temporaries to help vectorization */
+        float t_x = - dt * J[i].x;
+        float t_y = - dt_dx * ( B[i].z - B[i-1].z ) - dt * J[i].y;
+        float t_z = + dt_dx * ( B[i].y - B[i-1].y ) - dt * J[i].z;
 
+        /* apply updates */
+        E[i].x += t_x;
+        E[i].y += t_y;
+        E[i].z += t_z;
+    }
 }
 
 /**
@@ -471,37 +479,31 @@ void yee_e( t_emf *emf, const t_current *current, const float dt )
  */
 void emf_update_gc( t_emf *emf )
 {
-    float3* const restrict E = emf -> E;
-    float3* const restrict B = emf -> B;
+    float3* const restrict E = emf->E;
+    float3* const restrict B = emf->B;
     const int nx = emf->nx;
+    const int gc_lo = emf->gc[0];
+    const int gc_hi = emf->gc[1];
 
-	if ( emf -> bc_type == EMF_BC_PERIODIC ) {
-		// x
+    if (emf->bc_type == EMF_BC_PERIODIC) {
 
-		// lower
-		for (int i=-emf->gc[0]; i<0; i++) {
-			E[ i ].x = E[ nx + i ].x;
-			E[ i ].y = E[ nx + i ].y;
-			E[ i ].z = E[ nx + i ].z;
+        /* lower guard cells: i in [-gc_lo .. -1] copies from E[nx+i] */
+        #pragma omp parallel for schedule(static) if(gc_lo > 4)
+        for (int ii = 0; ii < gc_lo; ++ii) {
+            int i = -gc_lo + ii;          /* -gc_lo .. -1 */
+            E[i] = E[nx + i];
+            B[i] = B[nx + i];
+        }
 
-			B[ i ].x = B[ nx + i ].x;
-			B[ i ].y = B[ nx + i ].y;
-			B[ i ].z = B[ nx + i ].z;
-		}
-
-		// upper
-		for (int i=0; i<emf->gc[1]; i++) {
-			E[ nx + i ].x = E[ i ].x;
-			E[ nx + i ].y = E[ i ].y;
-			E[ nx + i ].z = E[ i ].z;
-
-			B[ nx + i ].x = B[ i ].x;
-			B[ nx + i ].y = B[ i ].y;
-			B[ nx + i ].z = B[ i ].z;
-		}
-	}
-
+        /* upper guard cells: i in [0 .. gc_hi-1] maps to E[nx + i] = E[i] */
+        #pragma omp parallel for schedule(static) if(gc_hi > 4)
+        for (int i = 0; i < gc_hi; ++i) {
+            E[nx + i] = E[i];
+            B[nx + i] = B[i];
+        }
+    }
 }
+
 
 /**
  * @brief Move simulation window
@@ -513,27 +515,35 @@ void emf_update_gc( t_emf *emf )
  * @param emf 
  */
 void emf_move_window( t_emf *emf ){
-	if ( ( emf -> iter * emf -> dt ) > emf->dx*( emf -> n_move + 1 ) ) {
+    if ((emf->iter * emf->dt) <= emf->dx * (emf->n_move + 1)) return;
 
-	    float3* const restrict E = emf -> E;
-	    float3* const restrict B = emf -> B;
+    const int nx = emf->nx;
+    const int gc_lo = emf->gc[0];
+    const int gc_hi = emf->gc[1];
 
-		// Shift data left 1 cell and zero rightmost cells
+    /* Total buffer length includes guards: from -gc_lo ... nx+gc_hi-1 => total = gc_lo + nx + gc_hi */
+    const int total = gc_lo + nx + gc_hi;
+    float3* const baseE = emf->E - gc_lo; /* pointer to buffer start */
+    float3* const baseB = emf->B - gc_lo;
 
-		for (int i = -emf->gc[0]; i < emf->nx+emf->gc[1] - 1; i++) {
-			E[ i ] = E[ i + 1 ];
-			B[ i ] = B[ i + 1 ];
-		}
+    /* Shift left by one cell: move element at index 1 to index 0 etc.
+       memmove handles overlapping regions correctly. We want to move
+       elements [1..total-1] to [0..total-2] */
+    memmove(&baseE[0], &baseE[1], (size_t)(total - 1) * sizeof(float3));
+    memmove(&baseB[0], &baseB[1], (size_t)(total - 1) * sizeof(float3));
 
-	    const float3 zero_fld = {0.,0.,0.};
-		for(int i = emf->nx - 1; i < emf->nx+emf->gc[1]; i ++) {
-			E[ i ] = zero_fld;
-			B[ i ] = zero_fld;
-		}
+    /* Zero the rightmost cells: indices nx-1 .. nx+gc_hi-1 in emf->E coordinates
+       which correspond to base index (gc_lo + nx - 1) .. (gc_lo + nx + gc_hi -1) */
+    const int start_zero = gc_lo + nx - 1;
+    const int count_zero = gc_hi + 1; /* from nx-1 to nx+gc_hi inclusive */
+    const float3 zero = {0.0f, 0.0f, 0.0f};
 
-		// Increase moving window counter
-		emf -> n_move++;
-	}
+    for (int idx = 0; idx < count_zero; ++idx) {
+        baseE[start_zero + idx] = zero;
+        baseB[start_zero + idx] = zero;
+    }
+
+    emf->n_move++;
 }
 
 /**
@@ -694,25 +704,34 @@ void emf_set_ext_fld( t_emf* const emf, t_emf_ext_fld* ext_fld ) {
  */
 void emf_update_part_fld( t_emf* const emf ) {
 
-    // Restrict pointers to E_part
-    float3* const restrict E_part = emf->E_part;
+    const int i0 = -emf->gc[0];
+    const int i1 = emf->nx + emf->gc[1] - 1;
 
+    /* Update E_part */
     switch (emf->ext_fld.E_type)
     {
     case EMF_FLD_TYPE_UNIFORM: {
-        for (int i=-emf->gc[0]; i<emf->nx+emf->gc[1]; i++) {
-            float3 e = emf -> E[i];
-            e.x += emf->ext_fld.E_0.x;
-            e.y += emf->ext_fld.E_0.y;
-            e.z += emf->ext_fld.E_0.z;
+        const float3 add = emf->ext_fld.E_0;
+        float3* const restrict E = emf->E;
+        float3* const restrict E_part = emf->E_part;
+
+        #pragma omp parallel for schedule(static)
+        for (int i = i0; i <= i1; ++i) {
+            float3 e = E[i];
+            e.x += add.x;
+            e.y += add.y;
+            e.z += add.z;
             E_part[i] = e;
         }
         break; }
     case EMF_FLD_TYPE_CUSTOM: {
-        for (int i=-emf->gc[0]; i<emf->nx+emf->gc[1]; i++) {
-            float3 ext_E = (*emf->ext_fld.E_custom)(i,emf->dx,emf->ext_fld.E_custom_data);
-
-            float3 e = emf -> E[i];
+        float3* const restrict E = emf->E;
+        float3* const restrict E_part = emf->E_part;
+        /* assume E_custom is thread-safe / pure; if not, remove parallel pragma */
+        #pragma omp parallel for schedule(static)
+        for (int i = i0; i <= i1; ++i) {
+            float3 ext_E = (*emf->ext_fld.E_custom)(i, emf->dx, emf->ext_fld.E_custom_data);
+            float3 e = E[i];
             e.x += ext_E.x;
             e.y += ext_E.y;
             e.z += ext_E.z;
@@ -720,42 +739,45 @@ void emf_update_part_fld( t_emf* const emf ) {
         }
         break; }
     case EMF_FLD_TYPE_NONE:
+        /* nothing to do: E_part already points to E */
         break;
     }
 
-    // Restrict pointers to B_part
-    float3* const restrict B_part = emf->B_part;
-
+    /* Update B_part */
     switch (emf->ext_fld.B_type)
     {
     case EMF_FLD_TYPE_UNIFORM: {
-        for (int i=-emf->gc[0]; i<emf->nx+emf->gc[1]; i++) {
-            float3 b = emf -> B[i];
-            b.x += emf->ext_fld.B_0.x;
-            b.y += emf->ext_fld.B_0.y;
-            b.z += emf->ext_fld.B_0.z;
+        const float3 add = emf->ext_fld.B_0;
+        float3* const restrict B = emf->B;
+        float3* const restrict B_part = emf->B_part;
+
+        #pragma omp parallel for schedule(static)
+        for (int i = i0; i <= i1; ++i) {
+            float3 b = B[i];
+            b.x += add.x;
+            b.y += add.y;
+            b.z += add.z;
             B_part[i] = b;
         }
-
-    }
-        break; 
+        break; }
     case EMF_FLD_TYPE_CUSTOM: {
-        for (int i=-emf->gc[0]; i<emf->nx+emf->gc[1]; i++) {
-            float3 ext_B = (*emf->ext_fld.B_custom)(i,emf->dx,emf->ext_fld.B_custom_data);
-
-            float3 b = emf -> B[i];
+        float3* const restrict B = emf->B;
+        float3* const restrict B_part = emf->B_part;
+        #pragma omp parallel for schedule(static)
+        for (int i = i0; i <= i1; ++i) {
+            float3 ext_B = (*emf->ext_fld.B_custom)(i, emf->dx, emf->ext_fld.B_custom_data);
+            float3 b = B[i];
             b.x += ext_B.x;
             b.y += ext_B.y;
             b.z += ext_B.z;
             B_part[i] = b;
         }
-    }
-        break; 
+        break; }
     case EMF_FLD_TYPE_NONE:
         break;
     }
-
 }
+
 
 /**
  * @brief Initialize EMF field values

@@ -918,160 +918,160 @@ int ltrim( float x )
  */
 void spec_advance( t_species* spec, t_emf* emf, t_current* current )
 {
-
     uint64_t t0;
     t0 = timer_ticks();
 
-    const float tem   = 0.5 * spec->dt/spec -> m_q;
+    const float tem   = 0.5f * spec->dt / spec->m_q;
     const float dt_dx = spec->dt / spec->dx;
 
-    // Auxiliary values for current deposition
-    const float qnx = spec -> q *  spec->dx / spec->dt;
+    /* qnx normalization for Jx */
+    const float qnx = spec->q * spec->dx / spec->dt;
 
-    const int nx0 = spec -> nx;
+    const int nx0 = spec->nx;
 
-    double energy = 0;
+    double energy = 0.0;
 
-    // Advance particles
-   #pragma omp parallel for reduction(+:energy) schedule(dynamic, 1024)
-    for (int i=0; i<spec->np; i++) {
+    /* Prepare thread-local J buffers.
+       We'll use nx0+1 entries (charge grid expected to have 1 guard cell). */
+    const int nx_stride = nx0 + 1;
+    int nthreads = omp_get_max_threads();
 
+    /* allocate and zero thread-local buffers */
+    float3 * Jthreads = (float3 *) calloc( (size_t)nthreads * (size_t)nx_stride, sizeof(float3) );
+    if ( Jthreads == NULL ) {
+        fprintf(stderr, "spec_advance: failed to allocate Jthreads (%d x %d)\n", nthreads, nx_stride);
+        exit(EXIT_FAILURE);
+    }
+
+    /* Particle push: each thread deposits into its Jloc buffer */
+  #pragma omp parallel for reduction(+:energy) schedule(static)
+    for (int i = 0; i < spec->np; i++) {
+        int tid = omp_get_thread_num();
+        float3 * restrict Jloc = Jthreads + (size_t)tid * (size_t)nx_stride;
+
+        /* Local copy of particle to reduce memory traffic */
+        t_part p = spec->part[i];
+
+        /* load momenta */
+        float ux = p.ux;
+        float uy = p.uy;
+        float uz = p.uz;
+
+        /* interpolate fields at particle */
         float3 Ep, Bp;
-        float utx, uty, utz;
-        float ux, uy, uz, u2;
-        float gamma, rg, gtem, otsq;
+        interpolate_fld( emf->E_part, emf->B_part, &p, &Ep, &Bp );
 
-        float x1;
+        /* advance momenta (Boris) */
+        Ep.x *= tem; Ep.y *= tem; Ep.z *= tem;
+        float utx = ux + Ep.x;
+        float uty = uy + Ep.y;
+        float utz = uz + Ep.z;
 
-        int di;
-        float dx;
+        float u2 = utx*utx + uty*uty + utz*utz;
+        float gamma = sqrtf(1.0f + u2);
 
-        // Load particle momenta
-        ux = spec -> part[i].ux;
-        uy = spec -> part[i].uy;
-        uz = spec -> part[i].uz;
+        energy += u2 / (1.0f + gamma);
 
-        // interpolate fields
-        interpolate_fld( emf -> E_part, emf -> B_part, &spec -> part[i], &Ep, &Bp );
-        // Ep.x = Ep.y = Ep.z = Bp.x = Bp.y = Bp.z = 0;
+        float gtem = tem / gamma;
 
-        // advance u using Boris scheme
-        Ep.x *= tem;
-        Ep.y *= tem;
-        Ep.z *= tem;
+        Bp.x *= gtem; Bp.y *= gtem; Bp.z *= gtem;
 
-        utx = ux + Ep.x;
-        uty = uy + Ep.y;
-        utz = uz + Ep.z;
-
-        // Perform first half of the rotation
-        // Get time centered gamma
-        u2 = utx*utx + uty*uty + utz*utz;
-        gamma = sqrtf( 1 + u2 );
-
-        // Accumulate time centered energy
-        energy += u2 / ( 1 + gamma );
-
-        gtem = tem / gamma;
-
-        Bp.x *= gtem;
-        Bp.y *= gtem;
-        Bp.z *= gtem;
-
-        otsq = 2.0f / ( 1.0f + Bp.x*Bp.x + Bp.y*Bp.y + Bp.z*Bp.z );
+        float otsq = 2.0f / (1.0f + Bp.x*Bp.x + Bp.y*Bp.y + Bp.z*Bp.z);
 
         ux = utx + uty*Bp.z - utz*Bp.y;
         uy = uty + utz*Bp.x - utx*Bp.z;
         uz = utz + utx*Bp.y - uty*Bp.x;
 
-        // Perform second half of the rotation
-
-        Bp.x *= otsq;
-        Bp.y *= otsq;
-        Bp.z *= otsq;
+        Bp.x *= otsq; Bp.y *= otsq; Bp.z *= otsq;
 
         utx += uy*Bp.z - uz*Bp.y;
         uty += uz*Bp.x - ux*Bp.z;
         utz += ux*Bp.y - uy*Bp.x;
 
-        // Perform second half of electric field acceleration
-        ux = utx + Ep.x;
-        uy = uty + Ep.y;
-        uz = utz + Ep.z;
+        ux = utx + Ep.x; uy = uty + Ep.y; uz = utz + Ep.z;
 
-        // Store new momenta
-        spec -> part[i].ux = ux;
-        spec -> part[i].uy = uy;
-        spec -> part[i].uz = uz;
+        /* store new momenta back to the global array (note: this write may
+           create false-sharing if many threads write adjacent t_part structs;
+           but it's a simple store and usually acceptable) */
+        spec->part[i].ux = ux;
+        spec->part[i].uy = uy;
+        spec->part[i].uz = uz;
 
-        // push particle
-        rg = 1.0f / sqrtf(1.0f + ux*ux + uy*uy + uz*uz);
+        /* push particle in x */
+        float rg = 1.0f / sqrtf(1.0f + ux*ux + uy*uy + uz*uz);
+        float dx = dt_dx * rg * ux;
 
-        dx = dt_dx * rg * ux;
-
-        x1 = spec -> part[i].x + dx;
-
-        di = ltrim(x1);
-
+        float x1 = p.x + dx;
+        int di = ( x1 >= 1.0f ) - ( x1 < 0.0f ); /* inline ltrim */
         x1 -= di;
 
         float qvy = spec->q * uy * rg;
         float qvz = spec->q * uz * rg;
 
-        // deposit current using Eskirepov method
-        // dep_current_esk( spec -> part[i].ix, di,
-        // 				 spec -> part[i].x, x1,
-        // 				 qnx, qvy, qvz,
-        // 				 current );
+        /* deposit into thread-local J buffer */
+        dep_current_zamb( p.ix, di, p.x, dx, qnx, qvy, qvz, Jloc );
 
-
-        dep_current_zamb( spec -> part[i].ix, di,
-                         spec -> part[i].x, dx,
-                         qnx, qvy, qvz,
-                         current );
-
-        // Store results
-        spec -> part[i].x = x1;
-        spec -> part[i].ix += di;
-
+        /* store updated position/index */
+        spec->part[i].x = x1;
+        spec->part[i].ix += di;
     }
 
-    // Store energy
-    spec -> energy = spec-> q * spec -> m_q * energy * spec -> dx;
+    /* store energy */
+    spec->energy = spec->q * spec->m_q * energy * spec->dx;
 
-    // Advance internal iteration number
-    spec -> iter += 1;
+    /* Advance iteration count */
+    spec->iter += 1;
 
-    // Check for particles leaving the box
-    if ( spec -> moving_window || spec -> bc_type == PART_BC_OPEN ){
+    /* Now reduce thread-local J buffers into the shared current->J in parallel */
+    /* Note: current->J is expected to have nx_stride entries */
+    float3 * Jshared = current->J;
 
-        // Move simulation window if needed
-        if (spec -> moving_window )	spec_move_window( spec );
+  #pragma omp parallel for schedule(static)
+    for (int idx = 0; idx < nx_stride; idx++) {
+        /* accumulate contributions from each thread for this idx */
+        float sx = 0.0f, sy = 0.0f, sz = 0.0f;
+        for (int t = 0; t < nthreads; t++) {
+            float3 * Jt = Jthreads + (size_t)t * (size_t)nx_stride;
+            sx += Jt[idx].x;
+            sy += Jt[idx].y;
+            sz += Jt[idx].z;
+        }
+        /* add to global current (this is single write per idx so no atomics) */
+        Jshared[idx].x += sx;
+        Jshared[idx].y += sy;
+        Jshared[idx].z += sz;
+    }
 
-        // Use absorbing boundaries along x
+    /* free thread buffers */
+    free(Jthreads);
+
+    /* Handle boundaries & moving window (same logic as before) */
+    if ( spec->moving_window || spec->bc_type == PART_BC_OPEN ) {
+
+        if ( spec->moving_window ) spec_move_window( spec );
+
         int i = 0;
-        while ( i < spec -> np ) {
-            if (( spec -> part[i].ix < 0 ) || ( spec -> part[i].ix >= nx0 )) {
-                spec -> part[i] = spec -> part[ -- spec -> np ];
+        while ( i < spec->np ) {
+            if (( spec->part[i].ix < 0 ) || ( spec->part[i].ix >= nx0 )) {
+                spec->part[i] = spec->part[ -- spec->np ];
                 continue;
             }
             i++;
         }
 
     } else {
-        // Use periodic boundaries in x
-        for (int i=0; i<spec->np; i++) {
-            spec -> part[i].ix += (( spec -> part[i].ix < 0 ) ? nx0 : 0 ) - (( spec -> part[i].ix >= nx0 ) ? nx0 : 0);
+        for (int i = 0; i < spec->np; i++) {
+            spec->part[i].ix += (( spec->part[i].ix < 0 ) ? nx0 : 0 ) - (( spec->part[i].ix >= nx0 ) ? nx0 : 0 );
         }
     }
 
-    // Sort species at every n_sort time steps
-    if ( spec -> n_sort > 0 ) {
-        if ( ! (spec -> iter % spec -> n_sort) ) spec_sort( spec );
+    /* sorting (same as before) */
+    if ( spec->n_sort > 0 ) {
+        if ( ! (spec->iter % spec->n_sort) ) spec_sort( spec );
     }
 
-    // Timing info
-    _spec_npush += spec -> np;
+    /* timing info */
+    _spec_npush += spec->np;
     _spec_time += timer_interval_seconds( t0, timer_ticks() );
 }
 

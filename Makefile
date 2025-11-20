@@ -1,15 +1,10 @@
 # GCC options
 CC = gcc
-CFLAGS = -Ofast -g -std=c99 -pedantic -Wall -fopenmp -fno-omit-frame-pointer \
-         -march=native -mtune=native -ffast-math -funroll-loops \
-         -ftree-vectorize -fopt-info-vec -flto
+CFLAGS = -Ofast -std=c99 -pedantic -Wall -fopenmp -mcpu=native \
+         -ffast-math -funroll-loops -ftree-vectorize -fopt-info-vec
 LDFLAGS = -lm -fopenmp -flto
-#CFLAGS = -Ofast -g -std=c99 -pedantic -Wall
 
-#CFLAGS = -Kfast -std=c99 
-#LDFLAGS = -lm
 
-LDFLAGS = -lm -fopenmp
 #Debug options
 #CFLAGS = -g -Og -std=c99 -pedantic -fsanitize=undefined -fsanitize=address
 

@@ -45,7 +45,6 @@ int report( int n, int ndump )
 void sim_iter( t_simulation* sim ) {
 	// Advance particles and deposit current
 	current_zero( &sim -> current );
-
 	for (int i = 0; i<sim -> n_species; i++)
 		spec_advance(&sim -> species[i], &sim -> emf, &sim -> current );
 

@@ -11,6 +11,7 @@
 
 #include "current.h"
 
+#include <stdio.h> 
 #include <stdlib.h>
 #include <assert.h>
 #include <string.h>
@@ -314,7 +315,7 @@ void kernel_x( t_current* const current, const float sa, const float sb )
     }
 
     /* compute filter into tmp (each index independent) */
-    #pragma omp parallel for schedule(static)
+    #pragma omp parallel for simd schedule(static)
     for (int i = 0; i < nx; ++i) {
         float3 fl = J[i - 1];
         float3 f0 = J[i];
@@ -327,7 +328,7 @@ void kernel_x( t_current* const current, const float sa, const float sb )
     }
 
     /* copy back */
-    #pragma omp parallel for schedule(static)
+    #pragma omp parallel for simd schedule(static)
     for (int i = 0; i < nx; ++i) {
         J[i] = tmp[i];
     }
@@ -364,6 +365,7 @@ void current_smooth( t_current* const current ) {
         // binomial filter
         sa = 0.25; sb = 0.5;
         for( int i = 0; i < current -> smooth.xlevel; i++) {
+       
             kernel_x( current, 0.25, 0.5 );
         }
 
@@ -375,4 +377,3 @@ void current_smooth( t_current* const current ) {
     }
 
 }
-
